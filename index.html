@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>PuyoTetoris Hybrid</title>
+    <style>
+        body { background-color: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; font-family: 'Arial', sans-serif; overflow: hidden; }
+        #game-container { position: relative; margin-top: 20px; border: 5px solid #444; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        canvas { background-color: #000; display: block; }
+        .info { margin-top: 15px; text-align: center; }
+        .score-val { font-size: 24px; color: #0f0; font-weight: bold; }
+        .controls { font-size: 14px; color: #aaa; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <h1>PuyoTetoris</h1>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="300" height="600"></canvas>
+    </div>
+    <div class="info">
+        <div>Score: <span id="score" class="score-val">0</span></div>
+        <div class="controls">← → : 移動 / ↓ : 加速 / Space, ↑ : 回転</div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreElement = document.getElementById('score');
+
+    const ROWS = 20;
+    const COLS = 10;
+    const SIZE = 30;
+
+    // 色定義 (1-4はぷよ用、5-11はテトリス用)
+    const COLORS = [
+        null,
+        '#FF3333', '#33FF33', '#3333FF', '#FFFF33', // Puyo (Red, Green, Blue, Yellow)
+        '#00FFFF', '#FF00FF', '#FFA500', '#0000FF', '#FF0000', '#00FF00', '#800080' // Tetris shapes
+    ];
+
+    let board = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+    let score = 0;
+    let gameOver = false;
+    let currentPiece = null;
+
+    // テトリミノの形状定義
+    const TETROMINOS = [
+        [[1,1,1,1]], // I
+        [[1,1],[1,1]], // O
+        [[0,1,1],[1,1,0]], // S
+        [[1,1,0],[0,1,1]], // Z
+        [[1,1,1],[0,1,0]], // T
+        [[1,1,1],[1,0,0]], // L
+        [[1,1,1],[0,0,1]]  // J
+    ];
+
+    class Piece {
+        constructor() {
+            this.type = Math.random() > 0.4 ? 'tetris' : 'puyo';
+            this.x = Math.floor(COLS / 2) - 1;
+            this.y = 0;
+            
+            if (this.type === 'puyo') {
+                this.puyoColors = [Math.floor(Math.random()*4)+1, Math.floor(Math.random()*4)+1];
+                this.rot = 0; // 0:上, 1:右, 2:下, 3:左
+            } else {
+                const shapeIdx = Math.floor(Math.random() * TETROMINOS.length);
+                this.shape = TETROMINOS[shapeIdx];
+                this.color = shapeIdx + 5; // 5以降の色
+            }
+        }
+
+        getBlocks() {
+            if (this.type === 'puyo') {
+                const blocks = [{ x: this.x, y: this.y, color: this.puyoColors[0], isPuyo: true }];
+                const offsets = [{x:0,y:-1}, {x:1,y:0}, {x:0,y:1}, {x:-1,y:0}];
+                const off = offsets[this.rot];
+                blocks.push({ x: this.x + off.x, y: this.y + off.y, color: this.puyoColors[1], isPuyo: true });
+                return blocks;
+            } else {
+                const blocks = [];
+                for (let r = 0; r < this.shape.length; r++) {
+                    for (let c = 0; c < this.shape[r].length; c++) {
+                        if (this.shape[r][c]) {
+                            blocks.push({ x: this.x + c, y: this.y + r, color: this.color, isPuyo: false });
+                        }
+                    }
+                }
+                return blocks;
+            }
+        }
+
+        rotate() {
+            if (this.type === 'puyo') {
+                const oldRot = this.rot;
+                this.rot = (this.rot + 1) % 4;
+                if (!this.isValid()) this.rot = oldRot;
+            } else {
+                const oldShape = this.shape;
+                this.shape = this.shape[0].map((_, i) => this.shape.map(row => row[i]).reverse());
+                if (!this.isValid()) this.shape = oldShape;
+            }
+        }
+
+        isValid(dx = 0, dy = 0) {
+            return this.getBlocks().every(b => {
+                const nx = b.x + dx;
+                const ny = b.y + dy;
+                return nx >= 0 && nx < COLS && ny < ROWS && (ny < 0 || board[ny][nx] === 0);
+            });
+        }
+    }
+
+    function spawnPiece() {
+        currentPiece = new Piece();
+        if (!currentPiece.isValid()) {
+            gameOver = true;
+            alert("GAME OVER! Score: " + score);
+            location.reload();
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // ボード描画
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                if (board[r][c]) drawBlock(c, r, board[r][c]);
+            }
+        }
+
+        // 操作中ブロック
+        if (currentPiece) {
+            currentPiece.getBlocks().forEach(b => drawBlock(b.x, b.y, b.color, b.isPuyo));
+        }
+    }
+
+    function drawBlock(x, y, colorIdx, isPuyoHint) {
+        if (y < 0) return;
+        const color = COLORS[colorIdx];
+        ctx.fillStyle = color;
+        
+        // 1-4はぷよ（丸）、それ以外はテトリス（四角）として描画
+        if (colorIdx <= 4) {
+            ctx.beginPath();
+            ctx.arc(x * SIZE + SIZE/2, y * SIZE + SIZE/2, SIZE/2 - 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = "white";
+            ctx.stroke();
+        } else {
+            ctx.fillRect(x * SIZE + 1, y * SIZE + 1, SIZE - 2, SIZE - 2);
+            ctx.strokeStyle = "rgba(255,255,255,0.3)";
+            ctx.strokeRect(x * SIZE + 1, y * SIZE + 1, SIZE - 2, SIZE - 2);
+        }
+    }
+
+    async function gameLoop() {
+        if (gameOver) return;
+
+        if (!currentPiece.isValid(0, 1)) {
+            // 着地処理
+            currentPiece.getBlocks().forEach(b => {
+                if (b.y >= 0) board[b.y][b.x] = b.color;
+            });
+            currentPiece = null;
+
+            // 連鎖・消去判定
+            await processChain();
+            
+            spawnPiece();
+        } else {
+            currentPiece.y++;
+        }
+        draw();
+    }
+
+    async function processChain() {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            applyGravity();
+            draw();
+
+            // 1. テトリスのライン消去判定
+            let linesToClear = [];
+            for (let r = 0; r < ROWS; r++) {
+                if (board[r].every(cell => cell !== 0)) linesToClear.push(r);
+            }
+
+            // 2. ぷよの接続消去判定
+            let puyoToClear = findPuyoMatches();
+
+            if (linesToClear.length > 0 || puyoToClear.length > 0) {
+                // スコア計算
+                score += (linesToClear.length * 100) + (puyoToClear.length * 10);
+                scoreElement.innerText = score;
+
+                // 消去実行
+                linesToClear.forEach(r => board[r].fill(0));
+                puyoToClear.forEach(p => board[p.r][p.c] = 0);
+                
+                changed = true;
+                await new Promise(r => setTimeout(r, 300));
+            }
+        }
+    }
+
+    function applyGravity() {
+        for (let c = 0; c < COLS; c++) {
+            let emptyRow = ROWS - 1;
+            for (let r = ROWS - 1; r >= 0; r--) {
+                if (board[r][c] !== 0) {
+                    let temp = board[r][c];
+                    board[r][c] = 0;
+                    board[emptyRow][c] = temp;
+                    emptyRow--;
+                }
+            }
+        }
+    }
+
+    function findPuyoMatches() {
+        let matched = [];
+        let checked = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                let color = board[r][c];
+                if (color > 0 && color <= 4 && !checked[r][c]) {
+                    let group = [];
+                    checkRecursive(r, c, color, group, checked);
+                    if (group.length >= 4) matched = matched.concat(group);
+                }
+            }
+        }
+        return matched;
+    }
+
+    function checkRecursive(r, c, color, group, checked) {
+        if (r < 0 || r >= ROWS || c < 0 || c >= COLS || checked[r][c] || board[r][c] !== color) return;
+        checked[r][c] = true;
+        group.push({r, c});
+        [[1,0],[-1,0],[0,1],[0,-1]].forEach(d => checkRecursive(r+d[0], c+d[1], color, group, checked));
+    }
+
+    window.addEventListener('keydown', e => {
+        if (!currentPiece || gameOver) return;
+        if (e.key === 'ArrowLeft' && currentPiece.isValid(-1, 0)) currentPiece.x--;
+        if (e.key === 'ArrowRight' && currentPiece.isValid(1, 0)) currentPiece.x++;
+        if (e.key === 'ArrowDown' && currentPiece.isValid(0, 1)) currentPiece.y++;
+        if (e.key === ' ' || e.key === 'ArrowUp') currentPiece.rotate();
+        draw();
+    });
+
+    spawnPiece();
+    setInterval(gameLoop, 800);
+</script>
+</body>
+</html>
